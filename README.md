@@ -14,30 +14,17 @@ Cue is a terminal-based code editor built with [Bubble Tea](https://github.com/c
 
 ## Install
 
-### Quick install (one-liner)
-
-**Unix (Linux / macOS):**
-```bash
-curl -fsSL https://github.com/Tijani127/Cue/releases/latest/download/install.sh | bash
-```
-
-**Windows (PowerShell):**
-```powershell
-irm https://github.com/Tijani127/Cue/releases/latest/download/install.ps1 | iex
-```
-
-Auto-detects OS and architecture, downloads the correct binary from GitHub Releases, and places it in `/usr/local/bin` (Unix) or `%LOCALAPPDATA%\Programs\Cue` (Windows).
-
-### Build from source
+From Source:
 
 ```bash
-git clone https://github.com/Tijani127/Cue.git
-cd Cue
+git clone <repo-url> cue
+cd cue
 go build -o cue.exe .
 ```
 
 Requires Go 1.26+.
 
+Or from a binary
 ## Usage
 
 ```bash
