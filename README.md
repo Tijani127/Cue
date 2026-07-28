@@ -14,11 +14,7 @@ Cue is a terminal-based code editor built with [Bubble Tea](https://github.com/c
 
 ## Install
 
-```bash
-go install cue@latest
-```
-
-Or build from source:
+From Source:
 
 ```bash
 git clone <repo-url> cue
@@ -28,6 +24,7 @@ go build -o cue.exe .
 
 Requires Go 1.26+.
 
+Or from a binary
 ## Usage
 
 ```bash
