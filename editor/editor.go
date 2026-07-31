@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -25,6 +26,21 @@ type clearStatusMsg struct{}
 type termPollMsg struct{}
 type pollCwdFileMsg struct {
 	cwd string
+}
+
+type lspCompletionMsg struct {
+	items []CompletionItem
+	err   error
+}
+
+type lspHoverMsg struct {
+	text string
+	err  error
+}
+
+type lspDefinitionMsg struct {
+	loc *DefinitionLocation
+	err error
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -73,6 +89,11 @@ type Editor struct {
 
 	cwdFilePath  string
 	cwdFileLast  string
+
+	// LSP feature state
+	completionItems []CompletionItem
+	completionIdx   int
+	completionOpen  bool
 }
 
 func NewEditor(files []string) *Editor {
@@ -242,6 +263,35 @@ func (e *Editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return e, e.pollCwdCmd()
+
+	case lspCompletionMsg:
+		if msg.err != nil {
+			e.setStatus("Completion: " + msg.err.Error())
+		} else if len(msg.items) > 0 {
+			e.completionItems = msg.items
+			e.completionIdx = 0
+			e.completionOpen = true
+		} else {
+			e.completionOpen = false
+			e.completionItems = nil
+		}
+		return e, nil
+
+	case lspHoverMsg:
+		if msg.err != nil {
+			e.setStatus("Hover: " + msg.err.Error())
+		} else if msg.text != "" {
+			e.setStatus(msg.text)
+		}
+		return e, nil
+
+	case lspDefinitionMsg:
+		if msg.err != nil {
+			e.setStatus("Definition: " + msg.err.Error())
+		} else if msg.loc != nil {
+			e.jumpToDefinition(msg.loc)
+		}
+		return e, nil
 
 	case clearStatusMsg:
 		e.statusText = ""
@@ -521,8 +571,48 @@ func (e *Editor) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return e, nil
 	}
 
+	// ── LSP feature keys ─────────────────────────────────────────────
+	switch msg.String() {
+	case "ctrl+space", "ctrl+@":
+		return e, e.requestCompletion()
+	case "f1":
+		return e, e.requestHover()
+	case "f12":
+		return e, e.requestDefinition()
+	}
+
+	// ── Completion menu keys ─────────────────────────────────────────
+	if e.completionOpen && len(e.completionItems) > 0 {
+		switch msg.String() {
+		case "up":
+			if e.completionIdx > 0 {
+				e.completionIdx--
+			}
+			return e, nil
+		case "down":
+			if e.completionIdx < len(e.completionItems)-1 {
+				e.completionIdx++
+			}
+			return e, nil
+		case "enter", "tab":
+			e.acceptCompletion()
+			return e, nil
+		case "esc":
+			e.completionOpen = false
+			e.completionItems = nil
+			return e, nil
+		}
+	}
+
 	// Editor navigation & editing
 	var needLSPUpdate bool
+	var needCompletion bool
+
+	wasCompletionOpen := e.completionOpen
+	if e.completionOpen {
+		e.completionOpen = false
+		e.completionItems = nil
+	}
 
 	switch msg.String() {
 	case "up":
@@ -550,9 +640,15 @@ func (e *Editor) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "backspace":
 		buf.DeleteBackward()
 		needLSPUpdate = true
+		if wasCompletionOpen {
+			needCompletion = true
+		}
 	case "delete":
 		buf.DeleteForward()
 		needLSPUpdate = true
+		if wasCompletionOpen {
+			needCompletion = true
+		}
 	case "enter":
 		buf.NewLine()
 		needLSPUpdate = true
@@ -567,6 +663,9 @@ func (e *Editor) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					needLSPUpdate = true
 				}
 			}
+			if wasCompletionOpen {
+				needCompletion = true
+			}
 		}
 	}
 
@@ -575,6 +674,10 @@ func (e *Editor) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if needLSPUpdate && e.lsp != nil && e.lsp.Ready() && buf.Path() != "" {
 		e.lsp.DidChange(PathToURI(buf.Path()), buf.Text(), 1)
+	}
+
+	if needCompletion && e.lsp != nil && e.lsp.Ready() {
+		return e, e.requestCompletion()
 	}
 
 	return e, nil
@@ -602,6 +705,117 @@ func (e *Editor) maybeSwitchLSP(path string, buf *Buffer) {
 	} else if e.lsp != nil && e.lsp.Ready() {
 		e.lsp.DidOpen(PathToURI(path), e.langID, buf.Text())
 	}
+}
+
+// ── LSP feature requests ────────────────────────────────────────────────────
+
+func (e *Editor) requestCompletion() tea.Cmd {
+	buf := e.activeBuffer()
+	if e.lsp == nil || !e.lsp.Ready() || buf == nil || buf.Path() == "" {
+		return nil
+	}
+	uri := PathToURI(buf.Path())
+	line, char := buf.CursorRow, buf.CursorCol
+	return func() tea.Msg {
+		items, err := e.lsp.Completion(uri, line, char)
+		return lspCompletionMsg{items: items, err: err}
+	}
+}
+
+func (e *Editor) requestHover() tea.Cmd {
+	buf := e.activeBuffer()
+	if e.lsp == nil || !e.lsp.Ready() || buf == nil || buf.Path() == "" {
+		return nil
+	}
+	uri := PathToURI(buf.Path())
+	line, char := buf.CursorRow, buf.CursorCol
+	return func() tea.Msg {
+		text, err := e.lsp.Hover(uri, line, char)
+		return lspHoverMsg{text: text, err: err}
+	}
+}
+
+func (e *Editor) requestDefinition() tea.Cmd {
+	buf := e.activeBuffer()
+	if e.lsp == nil || !e.lsp.Ready() || buf == nil || buf.Path() == "" {
+		return nil
+	}
+	uri := PathToURI(buf.Path())
+	line, char := buf.CursorRow, buf.CursorCol
+	return func() tea.Msg {
+		loc, err := e.lsp.Definition(uri, line, char)
+		return lspDefinitionMsg{loc: loc, err: err}
+	}
+}
+
+// jumpToDefinition moves the cursor to a definition, opening the file if needed.
+func (e *Editor) jumpToDefinition(loc *DefinitionLocation) {
+	if loc == nil || loc.URI == "" {
+		return
+	}
+	path := strings.TrimPrefix(loc.URI, "file://")
+	if path == "" {
+		return
+	}
+	idx := -1
+	for i, b := range e.buffers {
+		if filepath.Clean(b.Path()) == filepath.Clean(path) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		buf, err := NewBuffer(path)
+		if err != nil {
+			e.setStatus("Definition: " + err.Error())
+			return
+		}
+		e.buffers = append(e.buffers, buf)
+		idx = len(e.buffers) - 1
+		e.maybeSwitchLSP(path, buf)
+	}
+	e.active = idx
+	buf := e.buffers[idx]
+	buf.CursorRow = loc.Range.Start.Line
+	buf.CursorCol = loc.Range.Start.Character
+	buf.ClampCursor()
+	e.adjustScroll()
+	e.completionOpen = false
+	e.setStatus("Jumped to " + filepath.Base(path))
+}
+
+// acceptCompletion inserts the selected completion item at the cursor.
+func (e *Editor) acceptCompletion() {
+	buf := e.activeBuffer()
+	if buf == nil || e.completionIdx < 0 || e.completionIdx >= len(e.completionItems) {
+		e.completionOpen = false
+		e.completionItems = nil
+		return
+	}
+	item := e.completionItems[e.completionIdx]
+	text := item.InsertText
+	if text == "" {
+		text = item.Label
+	}
+	// Replace the current word prefix under the cursor with the insertion.
+	line := buf.Line(buf.CursorRow)
+	start := buf.CursorCol
+	for start > 0 && isWordChar(line[start-1]) {
+		start--
+	}
+	buf.CursorCol = start
+	buf.InsertString(text)
+	buf.ClampCursor()
+	e.adjustScroll()
+	e.completionOpen = false
+	e.completionItems = nil
+	if e.lsp != nil && e.lsp.Ready() && buf.Path() != "" {
+		e.lsp.DidChange(PathToURI(buf.Path()), buf.Text(), 1)
+	}
+}
+
+func isWordChar(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
 }
 
 // ── Command handler ────────────────────────────────────────────────────────
@@ -1104,6 +1318,7 @@ func (e *Editor) renderEditorBody() string {
 		}
 
 		diag := e.diagnosticAtLine(row)
+		markerLen := 0
 		if diag != nil {
 			marker := "•"
 			if diag.Severity <= 1 {
@@ -1112,22 +1327,135 @@ func (e *Editor) renderEditorBody() string {
 				marker = diagnosticWarnStyle.Render("•")
 			}
 			renderedLine = marker + " " + renderedLine
+			markerLen = 2
 		}
 
 		if isCursorLine {
-			// Strip trailing ANSI reset so cursor line background fills the whole line
-			renderedLine = strings.TrimSuffix(renderedLine, "\033[0m")
-			renderedLine = cursorLineStyle.Render(renderedLine)
+			renderedLine = styleCursorLine(renderedLine, buf.CursorCol+markerLen)
 		}
 		sb.WriteString(renderedLine)
 		sb.WriteString("\n")
 	}
 
 	remaining := visLines - (endLine - buf.Offset)
+	if e.completionOpen && len(e.completionItems) > 0 {
+		menu := e.renderCompletionMenu()
+		sb.WriteString(menu)
+		remaining -= strings.Count(menu, "\n")
+	}
 	for range remaining {
 		sb.WriteString("~\n")
 	}
 
+	return sb.String()
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Block cursor + completion menu rendering
+// ═══════════════════════════════════════════════════════════════════════════
+
+const (
+	cursorLineBg  = "\033[48;2;37;37;53m"    // #252535
+	cursorBlockFg = "\033[38;2;0;0;0m"       // black
+	cursorBlockBg = "\033[48;2;255;117;183m" // accent #FF75B7
+)
+
+// styleCursorLine applies the cursor-line background to every visible
+// character of an ANSI-styled line and draws a block cursor at visual column
+// col. Syntax-highlight colors are preserved.
+func styleCursorLine(highlighted string, col int) string {
+	var out strings.Builder
+	visCol := 0
+	active := ""
+	i := 0
+	n := len(highlighted)
+	for i < n {
+		if highlighted[i] == '\033' {
+			seq := readANSISequence(highlighted[i:])
+			if seq == "\033[0m" {
+				active = ""
+			} else {
+				active += seq
+			}
+			i += len(seq)
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(highlighted[i:])
+		sgr := active + cursorLineBg
+		if visCol == col {
+			sgr += cursorBlockFg + cursorBlockBg
+		}
+		out.WriteString(sgr)
+		out.WriteString(highlighted[i : i+size])
+		if visCol == col {
+			// Reset so the block's colors don't leak past this character.
+			out.WriteString("\033[0m")
+		}
+		visCol++
+		i += size
+	}
+	// Cursor beyond the end of the line: pad the gap, then draw a block.
+	for visCol < col {
+		out.WriteString(cursorLineBg)
+		out.WriteString(" ")
+		visCol++
+	}
+	if visCol == col {
+		out.WriteString(cursorBlockFg)
+		out.WriteString(cursorBlockBg)
+		out.WriteString(" ")
+	}
+	// Reset at line end so the cursor-line colors don't leak into the
+	// next row or panel.
+	out.WriteString("\033[0m")
+	return out.String()
+}
+
+// readANSISequence returns the complete escape sequence starting at s[0].
+func readANSISequence(s string) string {
+	if len(s) == 0 {
+		return ""
+	}
+	if s[0] == '\033' && len(s) > 1 && s[1] == '[' {
+		i := 2
+		for i < len(s) && !(s[i] >= 0x40 && s[i] <= 0x7E) {
+			i++
+		}
+		if i < len(s) {
+			i++
+		}
+		return s[:i]
+	}
+	return s[:1]
+}
+
+// renderCompletionMenu renders the active completion suggestions at the bottom
+// of the editor body.
+func (e *Editor) renderCompletionMenu() string {
+	edW := e.width
+	if e.showExplorer {
+		edW -= e.explorerWidth + 1
+	}
+	if edW < 20 {
+		edW = 60
+	}
+	show := min(8, len(e.completionItems))
+	selected := lipgloss.NewStyle().Background(accent).Foreground(lipgloss.Color("#000")).Bold(true).PaddingLeft(1).PaddingRight(1).MaxWidth(edW)
+	normal := lipgloss.NewStyle().Foreground(muted).PaddingLeft(1).PaddingRight(1).MaxWidth(edW)
+	var sb strings.Builder
+	for i := 0; i < show; i++ {
+		it := e.completionItems[i]
+		label := it.Label
+		if it.Detail != "" {
+			label += "  " + it.Detail
+		}
+		if i == e.completionIdx {
+			sb.WriteString(selected.Render(label))
+		} else {
+			sb.WriteString(normal.Render(label))
+		}
+		sb.WriteString("\n")
+	}
 	return sb.String()
 }
 

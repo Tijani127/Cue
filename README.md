@@ -72,6 +72,9 @@ cue                          # Start with an untitled buffer
 | `Ctrl+N` | New buffer |
 | `Ctrl+W` | Close tab |
 | `:` / `Ctrl+P` | Open command bar |
+| `Ctrl+Space` | Show completions (↑/↓ select, Enter/Tab accept, Esc close) |
+| `F1` | Hover info at cursor |
+| `F12` | Go to definition |
 
 ### File Explorer
 

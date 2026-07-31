@@ -141,6 +141,9 @@ Not a full terminal emulator — executes shell commands and shows output. Cross
 | `Ctrl+W` | Close tab |
 | `:` | Command bar |
 | `Ctrl+P` | Command bar (type `:q`, `:w`, `:open <path>`, etc.) |
+| `Ctrl+Space` | Completion menu (↑/↓ select, Enter/Tab accept, Esc close) |
+| `F1` | Hover info at cursor (status bar) |
+| `F12` | Go to definition (opens file in new tab if needed) |
 
 ### File explorer (when focused)
 | Key | Action |

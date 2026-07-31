@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -110,6 +111,42 @@ type LSPRange struct {
 type LSPPosition struct {
 	Line      int `json:"line"`
 	Character int `json:"character"`
+}
+
+// ── Feature types (completion / hover / definition) ─────────────────────────
+
+type textDocumentIdentifier struct {
+	URI string `json:"uri"`
+}
+
+// CompletionItem is a suggestion returned by textDocument/completion.
+type CompletionItem struct {
+	Label         string `json:"label"`
+	Kind          int    `json:"kind,omitempty"`
+	Detail        string `json:"detail,omitempty"`
+	Documentation string `json:"documentation,omitempty"`
+	InsertText    string `json:"insertText,omitempty"`
+}
+
+type completionParams struct {
+	TextDocument textDocumentIdentifier `json:"textDocument"`
+	Position     LSPPosition            `json:"position"`
+}
+
+type hoverParams struct {
+	TextDocument textDocumentIdentifier `json:"textDocument"`
+	Position     LSPPosition            `json:"position"`
+}
+
+type definitionParams struct {
+	TextDocument textDocumentIdentifier `json:"textDocument"`
+	Position     LSPPosition            `json:"position"`
+}
+
+// DefinitionLocation is the location of a symbol definition.
+type DefinitionLocation struct {
+	URI   string   `json:"uri"`
+	Range LSPRange `json:"range"`
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -304,6 +341,118 @@ func (c *LSPClient) DidChange(uri, text string, version int) {
 		TextDocument: versionedTextDocumentIdentifier{URI: uri, Version: version},
 		ContentChanges: []textDocumentContentChangeEvent{{Text: text}},
 	})
+}
+
+// ── Feature requests ────────────────────────────────────────────────────────
+
+// Completion requests completion items at the given position.
+func (c *LSPClient) Completion(uri string, line, char int) ([]CompletionItem, error) {
+	resp, err := c.sendRequest("textDocument/completion", completionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     LSPPosition{Line: line, Character: char},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.err != nil {
+		return nil, fmt.Errorf("completion: %s", resp.err.Message)
+	}
+	// Result is either a CompletionList ({items:[...]}) or a bare array.
+	var list struct {
+		Items []CompletionItem `json:"items"`
+	}
+	if err := json.Unmarshal(resp.result, &list); err == nil && list.Items != nil {
+		return list.Items, nil
+	}
+	var items []CompletionItem
+	if err := json.Unmarshal(resp.result, &items); err != nil {
+		return nil, fmt.Errorf("parse completion: %w", err)
+	}
+	return items, nil
+}
+
+// Hover requests hover information at the given position.
+func (c *LSPClient) Hover(uri string, line, char int) (string, error) {
+	resp, err := c.sendRequest("textDocument/hover", hoverParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     LSPPosition{Line: line, Character: char},
+	})
+	if err != nil {
+		return "", err
+	}
+	if resp.err != nil {
+		return "", fmt.Errorf("hover: %s", resp.err.Message)
+	}
+	var h struct {
+		Contents json.RawMessage `json:"contents"`
+	}
+	if err := json.Unmarshal(resp.result, &h); err != nil {
+		return "", fmt.Errorf("parse hover: %w", err)
+	}
+	return parseHoverText(h.Contents), nil
+}
+
+// Definition requests the definition location at the given position.
+func (c *LSPClient) Definition(uri string, line, char int) (*DefinitionLocation, error) {
+	resp, err := c.sendRequest("textDocument/definition", definitionParams{
+		TextDocument: textDocumentIdentifier{URI: uri},
+		Position:     LSPPosition{Line: line, Character: char},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.err != nil {
+		return nil, fmt.Errorf("definition: %s", resp.err.Message)
+	}
+	// Result can be a Location, []Location, or []LocationLink (targetUri).
+	var links []struct {
+		TargetURI   string   `json:"targetUri"`
+		TargetRange LSPRange `json:"targetRange"`
+	}
+	if err := json.Unmarshal(resp.result, &links); err == nil && len(links) > 0 && links[0].TargetURI != "" {
+		return &DefinitionLocation{URI: links[0].TargetURI, Range: links[0].TargetRange}, nil
+	}
+	var locs []DefinitionLocation
+	if err := json.Unmarshal(resp.result, &locs); err == nil && len(locs) > 0 {
+		return &locs[0], nil
+	}
+	var loc DefinitionLocation
+	if err := json.Unmarshal(resp.result, &loc); err != nil {
+		return nil, fmt.Errorf("parse definition: %w", err)
+	}
+	if loc.URI == "" {
+		return nil, fmt.Errorf("no definition found")
+	}
+	return &loc, nil
+}
+
+// parseHoverText extracts readable text from LSP hover contents, which can be
+// a plain string, a MarkupContent object, or an array of either.
+func parseHoverText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil && s != "" {
+		return s
+	}
+	var obj struct {
+		Value string `json:"value"`
+	}
+	if json.Unmarshal(raw, &obj) == nil && obj.Value != "" {
+		return obj.Value
+	}
+	var arr []json.RawMessage
+	if json.Unmarshal(raw, &arr) == nil {
+		var parts []string
+		for _, item := range arr {
+			if p := parseHoverText(item); p != "" {
+				parts = append(parts, p)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return ""
 }
 
 // ── JSON-RPC I/O ───────────────────────────────────────────────────────────
