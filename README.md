@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/Tijani127/Cue/main/scripts/install.
 
 **Windows (PowerShell):**
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/Tijani127/Cue/main/scripts/install.ps1 | iex -AddToPath"
+powershell -c "$s = Join-Path $env:TEMP 'cue-install.ps1'; Invoke-WebRequest -Uri https://raw.githubusercontent.com/Tijani127/Cue/main/scripts/install.ps1 -OutFile $s; powershell -ExecutionPolicy Bypass -File $s -AddToPath"
 ```
 
 Auto-detects OS and architecture, downloads the matching binary from GitHub Releases, and installs to `/usr/local/bin` (Unix) or `%LOCALAPPDATA%\Programs\Cue` (Windows).
