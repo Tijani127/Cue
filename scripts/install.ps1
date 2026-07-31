@@ -1,51 +1,53 @@
-# Cue — Install script for Windows (PowerShell)
-# Usage: irm https://github.com/Tijani127/Cue/releases/latest/download/install.ps1 | iex
+# Cue — Installer for Windows
+# Downloads the official binary from GitHub Releases.
+#
+# Usage:
+#   irm https://raw.githubusercontent.com/Tijani127/Cue/main/scripts/install.ps1 | iex
+#   powershell -ExecutionPolicy Bypass -File install.ps1 -AddToPath
 
+param(
+    [switch]$AddToPath,
+    [string]$InstallDir = "$env:LOCALAPPDATA\Programs\Cue"
+)
+
+$ErrorActionPreference = "Stop"
 $Repo = "Tijani127/Cue"
-$BinDir = $env:CUE_INSTALL_DIR
-if (-not $BinDir) {
-    $BinDir = "$env:LOCALAPPDATA\Programs\Cue"
-}
 
 # Detect architecture
 switch ($env:PROCESSOR_ARCHITECTURE) {
-    "AMD64"  { $Arch = "amd64" }
-    "ARM64"  { $Arch = "arm64" }
-    "X86"    { $Arch = "386" }
-    default  {
-        Write-Error "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE"
+    "AMD64" { $Arch = "amd64" }
+    "ARM64" { $Arch = "arm64" }
+    "X86"   { $Arch = "386" }
+    default {
+        Write-Host "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE"
         exit 1
     }
 }
 
-$Binary = "cue-windows-$Arch.exe"
-$Url = "https://github.com/$Repo/releases/latest/download/$Binary"
-$OutFile = Join-Path $BinDir "cue.exe"
+$Url = "https://github.com/$Repo/releases/latest/download/cue-windows-$Arch.exe"
+$OutFile = Join-Path $InstallDir "cue.exe"
 
 Write-Host "Downloading Cue for Windows/$Arch ..."
+New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 
-# Create bin directory if needed
-if (-not (Test-Path $BinDir)) {
-    New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
-}
-
-# Download
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-try {
-    $null = Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
-} catch {
-    Write-Error "Download failed: $_"
+# Use the native curl.exe binary (available on Windows 10+).
+& curl.exe -L --fail --silent --show-error -o $OutFile $Url
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "Download failed. If Windows Defender blocked the file, either:"
+    Write-Host "  1. Add an exclusion for $OutFile in Windows Security, then re-run, or"
+    Write-Host "  2. Download the binary manually from: $Url"
     exit 1
 }
 
-# Add to PATH if not already there
-$UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-if ($UserPath -notlike "*$BinDir*") {
-    $NewPath = "$UserPath;$BinDir"
-    [Environment]::SetEnvironmentVariable("PATH", $NewPath, "User")
-    $env:PATH = "$env:PATH;$BinDir"
-    Write-Host "Added $BinDir to user PATH"
-}
-
 Write-Host "Installed Cue to $OutFile"
-Write-Host "Run 'cue' to get started."
+
+if ($AddToPath) {
+    $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+    if ($UserPath -notlike "*$InstallDir*") {
+        [Environment]::SetEnvironmentVariable("PATH", "$UserPath;$InstallDir", "User")
+        Write-Host "Added $InstallDir to user PATH"
+    }
+} else {
+    Write-Host "Add '$InstallDir' to your PATH to run 'cue' from anywhere."
+}

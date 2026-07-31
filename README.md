@@ -23,10 +23,12 @@ curl -fsSL https://raw.githubusercontent.com/Tijani127/Cue/main/scripts/install.
 
 **Windows (PowerShell):**
 ```powershell
-powershell -c "irm https://raw.githubusercontent.com/Tijani127/Cue/main/scripts/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/Tijani127/Cue/main/scripts/install.ps1 | iex -AddToPath"
 ```
 
 Auto-detects OS and architecture, downloads the matching binary from GitHub Releases, and installs to `/usr/local/bin` (Unix) or `%LOCALAPPDATA%\Programs\Cue` (Windows).
+
+> **Windows Defender note:** Cue's binary and install script are unsigned, so Defender may flag them (false positive). If blocked, add an exclusion in Windows Security for the binary, or download it manually from the [releases page](https://github.com/Tijani127/Cue/releases).
 
 ### Build from source
 
