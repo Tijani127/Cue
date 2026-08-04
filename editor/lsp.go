@@ -267,7 +267,7 @@ func (c *LSPClient) Start() error {
 	// Initialize handshake
 	resp, err := c.sendRequest("initialize", initializeParams{
 		ProcessID: -1,
-		ClientInfo: &clientInfo{Name: "Cue", Version: "0.1.0"},
+		ClientInfo: &clientInfo{Name: "Cue", Version: "0.2.0"},
 		Capabilities: clientCapabilities{
 			TextDocument: textDocumentClientCapabilities{
 				Completion: &struct{}{},
